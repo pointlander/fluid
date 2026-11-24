@@ -1,0 +1,22 @@
+# Built programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/fluid
+
+# go test -c
+*.test
+
+# coverage
+*.out
+coverage.html
+
+# workspace
+go.work
+go.work.sum
+
+# frames from -out
+*.ppm
+frames/
