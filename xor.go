@@ -176,7 +176,12 @@ func (g *XORDrive) jetSpeed() float32 {
 // Sketch draws the velocity in the single body. '#' is the wall, '.' is slow
 // fluid, and the arrows follow the local velocity.
 func (g *XORDrive) Sketch(cols, rows int) string {
-	s := g.sim
+	return flowSketch(g.sim, cols, rows)
+}
+
+// flowSketch draws a sealed body's velocity. '#' is the wall, '.' is slow
+// fluid, and the arrows follow the local velocity.
+func flowSketch(s *Sim, cols, rows int) string {
 	if cols < 2 {
 		cols = 2
 	}
