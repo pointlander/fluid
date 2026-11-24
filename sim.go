@@ -7,15 +7,16 @@
 // Command fluid simulates free-surface water with the incompressible
 // Navier–Stokes equations on a staggered MAC grid.
 //
-//	∂u/∂t + (u·∇)u = −(1/ρ)∇p + ν∇²u + g
+//	∂u/∂t + (u·∇)u = −(1/ρ)∇p + ν∇²u + g + a
 //	∇·u = 0
 //
 // Each substep is an operator split: semi-Lagrangian advection, gravity,
-// explicit viscosity, then a pressure projection. Marker particles carry
-// the liquid. Air cells are a free surface (p = 0) and the tank walls are
-// solid. The Poisson problem is solved with Jacobi-preconditioned conjugate
-// gradient. Row stencils and element-wise updates run on a goroutine pool
-// and use simd.Float32s.
+// an optional streaming acceleration, explicit viscosity, then a pressure
+// projection. Marker particles carry a free surface. Air cells are p = 0
+// and the tank walls are solid. A sealed body has no free surface: every
+// interior cell stays liquid. The Poisson problem is solved with
+// Jacobi-preconditioned conjugate gradient. Row stencils and element-wise
+// updates run on a goroutine pool and use simd.Float32s.
 package main
 
 import (
@@ -147,6 +148,12 @@ type Sim struct {
 	maxDiv     float32
 	pinned     bool
 	pinAt      int
+
+	// sealed keeps every non-wall cell liquid. The body has no free surface.
+	sealed bool
+	// accelU and accelV are optional streaming accelerations on the
+	// staggered faces, in m/s². Nil leaves the momentum equation unchanged.
+	accelU, accelV []float32
 }
 
 // New builds a simulator. The tank walls are the outer cell layer.
@@ -317,6 +324,7 @@ func (s *Sim) seedRect(i0, i1, j0, j1 int) {
 
 // SeedDam drops a column of water against the left wall.
 func (s *Sim) SeedDam() {
+	s.sealed = false
 	s.resetFields()
 	i0, i1, j0, j1 := s.damRect()
 	s.seedRect(i0, i1, j0, j1)
@@ -325,10 +333,35 @@ func (s *Sim) SeedDam() {
 
 // SeedPool fills a still pool. One pressure projection should hold it up.
 func (s *Sim) SeedPool() {
+	s.sealed = false
 	s.resetFields()
 	i0, i1, j0, j1 := s.poolRect()
 	s.seedRect(i0, i1, j0, j1)
 	s.Classify()
+}
+
+// FillBody fills the tank with one sealed body of liquid. Interior cells
+// stay liquid, so the body has no free surface and no room for internal walls.
+func (s *Sim) FillBody() {
+	s.resetFields()
+	s.sealed = true
+	s.Classify()
+}
+
+// SetStreaming installs face accelerations applied with the body force.
+// au matches the horizontal faces and av the vertical faces.
+// Pass nil, nil to remove the drive.
+func (s *Sim) SetStreaming(au, av []float32) error {
+	if au == nil && av == nil {
+		s.accelU, s.accelV = nil, nil
+		return nil
+	}
+	if len(au) != len(s.u) || len(av) != len(s.v) {
+		return fmt.Errorf("streaming acceleration has length %d,%d, want %d,%d",
+			len(au), len(av), len(s.u), len(s.v))
+	}
+	s.accelU, s.accelV = au, av
+	return nil
 }
 
 // CenterOfMass is the average marker position, in meters.
@@ -348,8 +381,22 @@ func (s *Sim) CenterOfMass() (x, y float32) {
 
 // Classify marks every cell that contains a marker as fluid.
 // Wall cells stay solid. Cells with no marker become air.
+// A sealed body skips the markers and keeps every interior cell liquid.
 func (s *Sim) Classify() {
 	nx, ny := s.nx, s.ny
+	if s.sealed {
+		count := 0
+		for id, wall := range s.solid {
+			if wall == 1 {
+				s.cell[id] = cellSolid
+				continue
+			}
+			s.cell[id] = cellFluid
+			count++
+		}
+		s.fluidCount = count
+		return
+	}
 	for id, wall := range s.solid {
 		if wall == 1 {
 			s.cell[id] = cellSolid
@@ -404,6 +451,9 @@ func (s *Sim) Step(dt float32) Stats {
 	s.advectVelocity(dt)
 	s.enforceSolid()
 	addGravity(s, dt)
+	if s.accelU != nil {
+		addAcceleration(s, dt)
+	}
 	if s.nu > 0 {
 		s.viscosity(dt)
 		s.enforceSolid()

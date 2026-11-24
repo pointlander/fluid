@@ -77,6 +77,34 @@ func addGravity(s *Sim, dt float32) {
 	})
 }
 
+// addAcceleration applies a streaming acceleration on liquid faces.
+// accelU and accelV are m/s² on the staggered velocity.
+func addAcceleration(s *Sim, dt float32) {
+	lanes := s.lanes
+	dtV := simd.BroadcastFloat32s(dt)
+	au, av := s.accelU, s.accelV
+	u, v := s.u, s.v
+	uMask, vMask := s.uFluid, s.vFluid
+	s.parallel(len(u), func(w, i0, i1 int) {
+		i := i0
+		for ; i+lanes <= i1; i += lanes {
+			simd.LoadFloat32s(au[i:]).Mul(simd.LoadFloat32s(uMask[i:])).MulAdd(dtV, simd.LoadFloat32s(u[i:])).Store(u[i:])
+		}
+		for ; i < i1; i++ {
+			u[i] += dt * au[i] * uMask[i]
+		}
+	})
+	s.parallel(len(v), func(w, i0, i1 int) {
+		i := i0
+		for ; i+lanes <= i1; i += lanes {
+			simd.LoadFloat32s(av[i:]).Mul(simd.LoadFloat32s(vMask[i:])).MulAdd(dtV, simd.LoadFloat32s(v[i:])).Store(v[i:])
+		}
+		for ; i < i1; i++ {
+			v[i] += dt * av[i] * vMask[i]
+		}
+	})
+}
+
 // dot is the sum of a[i]*b[i] over the shared length, accumulated in float64.
 func dot(s *Sim, a, b []float32) float64 {
 	for i := range s.partial {
