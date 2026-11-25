@@ -21,7 +21,7 @@ func main() {
 	frameDt := flag.Float64("frame-dt", 0.05, "seconds of simulation between PPM frames")
 	preview := flag.Bool("preview", false, "draw a truecolor frame on stdout as the liquid runs")
 	workers := flag.Int("workers", 0, "goroutine workers (0 uses GOMAXPROCS)")
-	scene := flag.String("scene", "dam", "dam, pool, xor, or cnot (ultrasonic gates in one body of water)")
+	scene := flag.String("scene", "dam", "dam, pool, xor, cnot, or halt (easy halting witness in one body of water)")
 	nu := flag.Float64("nu", 1e-6, "kinematic viscosity in m^2/s; water at 20°C is about 1e-6")
 	g := flag.Float64("g", 9.81, "gravity in m/s^2, applied downward")
 	rho := flag.Float64("rho", 1000, "density in kg/m^3")
@@ -39,7 +39,7 @@ func main() {
 	}
 	flag.Parse()
 
-	if *scene == "xor" || *scene == "cnot" {
+	if *scene == "xor" || *scene == "cnot" || *scene == "halt" {
 		// The dam-break default of 1 s is past the drive these gates are built for.
 		drive := float32(0.05)
 		flag.Visit(func(f *flag.Flag) {
@@ -48,10 +48,13 @@ func main() {
 			}
 		})
 		var err error
-		if *scene == "xor" {
+		switch *scene {
+		case "xor":
 			err = runXOR(*workers, drive, *inA, *inB)
-		} else {
+		case "cnot":
 			err = runCNOT(*workers, drive, *inA, *inB)
+		default:
+			err = runEasyHalt(*workers)
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -79,7 +82,7 @@ func main() {
 	case "pool":
 		sim.SeedPool()
 	default:
-		fmt.Fprintf(os.Stderr, "unknown scene %q (want dam, pool, xor, or cnot)\n", *scene)
+		fmt.Fprintf(os.Stderr, "unknown scene %q (want dam, pool, xor, cnot, or halt)\n", *scene)
 		os.Exit(1)
 	}
 
